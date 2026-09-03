@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<meta name="theme-color" content="#211f26" />
+<title>Isolation Policy</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+
+  <header class="topbar">
+    <div class="topbar-text">
+      <h1>Isolation Policy</h1>
+      <p>Block isolated / app-zygote service processes per app.</p>
+    </div>
+    <button id="infoToggle" class="icon-btn" type="button" aria-label="Module info" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>
+    </button>
+  </header>
+
+  <section id="infoPanel" class="panel" hidden>
+    <div class="panel-header">
+      <span class="panel-title">Module status</span>
+      <span id="buildChip" class="chip">…</span>
+    </div>
+    <div id="infoGrid" class="info-grid">
+      <div class="info-row"><span class="info-label">Loading device &amp; module status…</span></div>
+    </div>
+    <div class="panel-actions">
+      <button id="viewLogsBtn" class="btn btn-tonal" type="button">View recent logs</button>
+      <button id="toggleModuleBtn" class="btn btn-outlined" type="button">…</button>
+    </div>
+  </section>
+
+  <section id="logPanel" class="panel" hidden>
+    <div class="panel-header">
+      <span class="panel-title">Recent logs · IsolPolicyZygisk</span>
+      <div class="panel-header-actions">
+        <button id="refreshLogsBtn" class="icon-btn icon-btn-sm" type="button" aria-label="Refresh logs">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08a5.99 5.99 0 0 1-5.65 4c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L14 11h7V4l-3.35 2.35z"/></svg>
+        </button>
+        <button id="closeLogsBtn" class="icon-btn icon-btn-sm" type="button" aria-label="Close logs">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
+    </div>
+    <pre id="logOutput" class="log-output">Loading…</pre>
+  </section>
+
+  <main>
+    <div class="stat-row">
+      <div class="stat-card">
+        <span class="stat-value" id="statInstalled">–</span>
+        <span class="stat-label">Installed</span>
+      </div>
+      <div class="stat-card stat-card-accent">
+        <span class="stat-value" id="statDenied">–</span>
+        <span class="stat-label">Denied</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value" id="statUpdated">–</span>
+        <span class="stat-label">Last saved</span>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <div class="search-field">
+        <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+        <input id="search" type="text" placeholder="Search by package name…" />
+      </div>
+      <button id="refresh" class="btn btn-tonal" type="button">Refresh</button>
+    </div>
+
+    <div id="list" class="list-card"></div>
+    <div id="empty" class="empty-state">No apps match your search.</div>
+
+    <div class="apply-spacer" aria-hidden="true"></div>
+  </main>
+
+  <button id="apply" class="fab-apply" type="button">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+    <span>Apply changes</span>
+  </button>
+
+  <div id="snackbar" class="snackbar" role="status" aria-live="polite"></div>
+</div>
+<script src="build-info.js"></script>
+<script src="bridge.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
