@@ -1,0 +1,159 @@
+name: Build IsolPolicyZygisk
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+    paths:
+      - 'module/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle/**'
+      - '.github/workflows/build.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Zygisk module (${{ matrix.variant }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Release: minimal logcat output, for daily use.
+        # Debug:   verbose per-event logcat output, for troubleshooting.
+        include:
+          - variant: release
+            gradle_suffix: Release
+            artifact_name: zygisk_isolationpolicy
+            zip_name: zygisk_isolationpolicy.zip
+          - variant: debug
+            gradle_suffix: Debug
+            artifact_name: zygisk_isolationpolicy-debug
+            zip_name: zygisk_isolationpolicy-debug.zip
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Init log file
+        # Semua step di bawah nge-append ke file ini (lihat "tee -a" tiap step).
+        # File ini yang di-upload sebagai artifact kalau job gagal.
+        run: |
+          echo "== Build log: IsolPolicyZygisk (${{ matrix.variant }}) ==" > build.log
+          echo "Run: ${{ github.run_id }} / attempt ${{ github.run_attempt }}" >> build.log
+          echo "Commit: ${{ github.sha }}" >> build.log
+          date -u >> build.log
+
+      - name: Ensure libcxx submodule is present
+        # Zip upload ini belum punya .gitmodules, jadi kalau folder libcxx
+        # kosong (Android.mk tidak ada), clone manual dari sumber aslinya.
+        # Kalau nanti .gitmodules sudah ditambahkan ke repo, langkah ini
+        # otomatis jadi no-op (submodules: recursive di atas sudah cukup).
+        run: |
+          set -o pipefail
+          {
+            if [ ! -f module/jni/libcxx/Android.mk ]; then
+              echo "libcxx kosong/tidak ada, cloning manual..."
+              rm -rf module/jni/libcxx
+              git clone --depth=1 https://github.com/topjohnwu/libcxx.git module/jni/libcxx
+            else
+              echo "libcxx sudah tersedia."
+            fi
+          } 2>&1 | tee -a build.log
+
+      - name: Patch libcxx generic bit builtins (NDK Clang-19 compat)
+        # topjohnwu/libcxx was recently updated to an AOSP libc++ snapshot whose
+        # __bit/countr.h and __bit/countl.h use the *generic* two-arg builtins
+        # __builtin_ctzg / __builtin_clzg. Those aren't recognized by Clang 19
+        # (the compiler in NDK 28.2.13676358), which breaks any TU that pulls
+        # in <algorithm> (e.g. std::sort, reached indirectly via std::string).
+        # scripts/patch_libcxx_builtins.py rewrites those two calls to the
+        # classic per-width builtins that Clang 19 does understand. Idempotent,
+        # so this is safe to run every build.
+        run: |
+          set -o pipefail
+          python3 scripts/patch_libcxx_builtins.py module/jni/libcxx/include 2>&1 | tee -a build.log
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept SDK licenses
+        run: |
+          set -o pipefail
+          (yes | sdkmanager --licenses) 2>&1 | tee -a build.log || true
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build native libs (ndkBuild, ${{ matrix.variant }})
+        run: |
+          set -o pipefail
+          ./gradlew :module:externalNativeBuild${{ matrix.gradle_suffix }} --stacktrace --info 2>&1 | tee -a build.log
+
+      - name: Package flashable module zip (${{ matrix.variant }})
+        run: |
+          set -o pipefail
+          ./gradlew :module:packageZygiskModule${{ matrix.gradle_suffix }} --stacktrace --info 2>&1 | tee -a build.log
+
+      - name: Show output
+        run: |
+          set -o pipefail
+          { echo "--- out/ contents ---"; ls -la out/ 2>&1 || echo "(out/ tidak ada)"; } | tee -a build.log
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: out/${{ matrix.zip_name }}
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.variant }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zygisk_isolationpolicy
+          path: out
+
+      - name: Download debug artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zygisk_isolationpolicy-debug
+          path: out
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/zygisk_isolationpolicy.zip
+            out/zygisk_isolationpolicy-debug.zip
+          generate_release_notes: true
+          body: |
+            **Which zip do I flash?**
+            - `zygisk_isolationpolicy.zip` - release build, minimal logcat output. Use this for daily use.
+            - `zygisk_isolationpolicy-debug.zip` - debug build, verbose per-event logcat output (`logcat -s IsolPolicyZygisk`). Use this only when troubleshooting; both can be flashed side by side since they use different module IDs.
