@@ -15,22 +15,8 @@ on:
 
 jobs:
   build:
-    name: Build Zygisk module (${{ matrix.variant }})
+    name: Build Zygisk module
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # Release: minimal logcat output, for daily use.
-        # Debug:   verbose per-event logcat output, for troubleshooting.
-        include:
-          - variant: release
-            gradle_suffix: Release
-            artifact_name: zygisk_isolationpolicy
-            zip_name: zygisk_isolationpolicy.zip
-          - variant: debug
-            gradle_suffix: Debug
-            artifact_name: zygisk_isolationpolicy-debug
-            zip_name: zygisk_isolationpolicy-debug.zip
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,7 +28,7 @@ jobs:
         # Semua step di bawah nge-append ke file ini (lihat "tee -a" tiap step).
         # File ini yang di-upload sebagai artifact kalau job gagal.
         run: |
-          echo "== Build log: IsolPolicyZygisk (${{ matrix.variant }}) ==" > build.log
+          echo "== Build log: IsolPolicyZygisk ==" > build.log
           echo "Run: ${{ github.run_id }} / attempt ${{ github.run_attempt }}" >> build.log
           echo "Commit: ${{ github.sha }}" >> build.log
           date -u >> build.log
@@ -95,15 +81,15 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build native libs (ndkBuild, ${{ matrix.variant }})
+      - name: Build native libs (ndkBuild)
         run: |
           set -o pipefail
-          ./gradlew :module:externalNativeBuild${{ matrix.gradle_suffix }} --stacktrace --info 2>&1 | tee -a build.log
+          ./gradlew :module:externalNativeBuildRelease --stacktrace --info 2>&1 | tee -a build.log
 
-      - name: Package flashable module zip (${{ matrix.variant }})
+      - name: Package flashable module zip
         run: |
           set -o pipefail
-          ./gradlew :module:packageZygiskModule${{ matrix.gradle_suffix }} --stacktrace --info 2>&1 | tee -a build.log
+          ./gradlew :module:packageZygiskModule --stacktrace --info 2>&1 | tee -a build.log
 
       - name: Show output
         run: |
@@ -113,15 +99,15 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: out/${{ matrix.zip_name }}
+          name: zygisk_isolationpolicy
+          path: out/zygisk_isolationpolicy.zip
           if-no-files-found: error
 
       - name: Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-${{ matrix.variant }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: build-log-${{ github.run_id }}-${{ github.run_attempt }}
           path: build.log
           if-no-files-found: warn
           retention-days: 14
@@ -134,26 +120,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download release artifact
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: zygisk_isolationpolicy
           path: out
 
-      - name: Download debug artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: zygisk_isolationpolicy-debug
-          path: out
-
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            out/zygisk_isolationpolicy.zip
-            out/zygisk_isolationpolicy-debug.zip
+          files: out/zygisk_isolationpolicy.zip
           generate_release_notes: true
-          body: |
-            **Which zip do I flash?**
-            - `zygisk_isolationpolicy.zip` - release build, minimal logcat output. Use this for daily use.
-            - `zygisk_isolationpolicy-debug.zip` - debug build, verbose per-event logcat output (`logcat -s IsolPolicyZygisk`). Use this only when troubleshooting; both can be flashed side by side since they use different module IDs.

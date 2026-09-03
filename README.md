@@ -50,25 +50,24 @@ just app-zygote-hosted ones (a superset of the original's scope).
 isolationpolicy-zygisk/
 ├── build.gradle.kts, settings.gradle.kts, gradlew...   # unmodified sample scaffold
 ├── module/
-│   ├── build.gradle.kts        # ndkBuild wiring + packageZygiskModuleRelease/Debug tasks
+│   ├── build.gradle.kts        # ndkBuild wiring + packageZygiskModule task
 │   ├── jni/
 │   │   ├── Android.mk          # unmodified template, just renamed target
 │   │   ├── Application.mk      # unmodified template
 │   │   ├── zygisk.hpp          # unmodified public Zygisk API header
-│   │   └── isolation_policy.cpp   # <- the actual ported logic (IP_DEBUG-gated logging)
+│   │   └── isolation_policy.cpp   # <- the actual ported logic
 │   ├── src/main/AndroidManifest.xml   # empty, required by AGP library module
 │   └── flash/                  # flashable module skeleton (zipped as-is)
 │       ├── module.prop
 │       ├── customize.sh        # creates /data/adb/isolationpolicy/denied.list
 │       ├── uninstall.sh
 │       ├── META-INF/...        # standard Magisk installer stub
-│       └── webroot/            # the WebUI (Material Design 3 + dynamic color)
+│       └── webroot/            # the WebUI
 │           ├── index.html
 │           ├── style.css
 │           ├── bridge.js       # root-shell exec bridge (ksu.exec)
-│           ├── app.js          # list apps, edit denylist, save, status/log panels
-│           └── build-info.js   # placeholder; regenerated per build by Gradle
-└── package.sh                  # fallback manual packager (produces a release-flavored zip)
+│           └── app.js          # list apps, edit denylist, save
+└── package.sh                  # fallback manual packager
 ```
 
 ## How the policy is stored
@@ -89,24 +88,6 @@ elsewhere means updating the module never resets your denylist.
 The `REGISTER_ZYGISK_COMPANION` hook in `isolation_policy.cpp` is present
 but currently unused, reserved for anyone who wants to extend this with
 richer status reporting later.
-
-## Release vs debug builds
-
-`isolation_policy.cpp` compiles to two independent flavors, controlled by
-the `IP_DEBUG` preprocessor macro (set per Gradle build type in
-`module/build.gradle.kts`, via `externalNativeBuild.ndkBuild.cFlags`):
-
-|                      | Release (`IP_DEBUG=0`)                          | Debug (`IP_DEBUG=1`)                                  |
-|----------------------|--------------------------------------------------|--------------------------------------------------------|
-| Logcat volume        | Minimal — only module load, denylist hits, and real errors/warnings | Verbose — every `preAppSpecialize()` call, every resolved package name, every denylist line scanned |
-| Module id            | `zygisk_isolationpolicy`                          | `zygisk_isolationpolicy_debug`                          |
-| Output zip           | `out/zygisk_isolationpolicy.zip`                  | `out/zygisk_isolationpolicy-debug.zip`                  |
-| Intended use          | Daily use                                        | Troubleshooting (`logcat -s IsolPolicyZygisk`, or the WebUI's "View recent logs" panel) |
-
-Because the two flavors use different module IDs, both can be flashed side
-by side if you ever want to compare them. CI (`.github/workflows/build.yml`)
-builds and uploads both on every run, and attaches both zips to tagged
-releases.
 
 ## Building
 
@@ -139,20 +120,14 @@ in CI on every build) is safe. The CI workflow
 Then either:
 
 ```bash
-# Release (minimal logging)
-./gradlew :module:externalNativeBuildRelease :module:packageZygiskModuleRelease
+./gradlew :module:externalNativeBuildRelease
+./gradlew :module:packageZygiskModule
 # -> out/zygisk_isolationpolicy.zip
-
-# Debug (verbose logging)
-./gradlew :module:externalNativeBuildDebug :module:packageZygiskModuleDebug
-# -> out/zygisk_isolationpolicy-debug.zip
 ```
 
 or, if your AGP version's ndkBuild output path doesn't match what the
 Gradle task expects, build with `ndk-build` directly and use the fallback
-script (note: `package.sh` doesn't set `IP_DEBUG`, so it always produces a
-release-style zip; pass `APP_CFLAGS=-DIP_DEBUG=1` to `ndk-build` yourself
-first if you want a debug .so out of this path):
+script:
 
 ```bash
 cd module
@@ -167,13 +142,10 @@ cd ..
 1. Enable Zygisk (Magisk: Settings → Zygisk, or install ReZygisk /
    NeoZygisk / BreZygisk if your Magisk build dropped Zygisk, or use
    KernelSU/APatch which ship it built-in).
-2. Flash `zygisk_isolationpolicy.zip` (or the `-debug` build if you're
-   troubleshooting) in your root manager, reboot.
-3. Open the module's **Action/WebUI** button in your root manager. The
-   WebUI shows install stats and lets you tick the apps you want to deny
-   isolated/app-zygote services for; tap **Apply changes** to save. Tap the
-   ⓘ icon for module/device status, native-lib presence per ABI, an
-   enable/disable toggle, and a built-in recent-logs viewer.
+2. Flash `zygisk_isolationpolicy.zip` in your root manager, reboot.
+3. Open the module's **Action/WebUI** button in your root manager, tick the
+   apps you want to deny isolated/app-zygote services for, tap
+   **Apply changes**.
 
 ## Known limitations
 

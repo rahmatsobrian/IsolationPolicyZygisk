@@ -1,0 +1,7 @@
+id=zygisk_isolationpolicy
+name=Isolation Policy (Zygisk)
+version=v1.0.0
+versionCode=1
+author=ported from mhmrdd/Isolation-Policy (LSPosed)
+description=Standalone Zygisk module that blocks isolated / app-zygote service processes for chosen apps. Includes a WebUI to manage the denylist. No LSPosed/Xposed required.
+zygisk=true

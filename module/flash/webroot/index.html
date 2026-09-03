@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Isolation Policy</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+    <h1>Isolation Policy</h1>
+    <p>Choose apps whose isolated / app-zygote service processes should be blocked.</p>
+</header>
+<main>
+    <div class="toolbar">
+        <input id="search" type="text" placeholder="Search by package name…" />
+        <button id="refresh" type="button">Refresh</button>
+    </div>
+    <div id="counts">Loading…</div>
+    <div id="status"></div>
+    <div id="list"></div>
+    <div id="empty">No apps match your search.</div>
+    <button id="apply" type="button">Apply changes</button>
+</main>
+<script src="bridge.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

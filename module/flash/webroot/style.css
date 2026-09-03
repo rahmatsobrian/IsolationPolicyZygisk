@@ -1,0 +1,131 @@
+:root {
+    color-scheme: dark;
+    --bg: #1a1a1a;
+    --panel: #242424;
+    --border: #333;
+    --text: #e8e8e8;
+    --sub: #9a9a9a;
+    --accent: #4dabf7;
+    --danger: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: -apple-system, Roboto, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+}
+
+header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+    margin: 0 0 4px;
+    font-size: 18px;
+}
+
+header p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--sub);
+}
+
+main {
+    padding: 12px 16px 24px;
+    max-width: 640px;
+    margin: 0 auto;
+}
+
+.toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+#search {
+    flex: 1;
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 14px;
+}
+
+button {
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 14px;
+}
+
+button:active { opacity: 0.8; }
+button:disabled { opacity: 0.5; }
+
+#apply {
+    background: var(--accent);
+    color: #10202b;
+    border-color: var(--accent);
+    font-weight: 600;
+    width: 100%;
+    margin-top: 12px;
+}
+
+#counts {
+    font-size: 12px;
+    color: var(--sub);
+    margin: 8px 2px;
+}
+
+#status {
+    font-size: 12px;
+    color: var(--sub);
+    min-height: 16px;
+    margin: 4px 2px 8px;
+}
+
+#status.error { color: var(--danger); }
+
+#list {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+}
+
+.row:last-child { border-bottom: none; }
+
+.row input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+.pkg {
+    font-family: monospace;
+    font-size: 13px;
+    word-break: break-all;
+}
+
+#empty {
+    display: none;
+    text-align: center;
+    color: var(--sub);
+    padding: 24px;
+    font-size: 13px;
+}
