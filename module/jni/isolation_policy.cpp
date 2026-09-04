@@ -22,17 +22,27 @@
  * _exit() when the package is denied, we kill the app_zygote process before
  * doPreload() ever runs.
  *
- * ---- DEBUG BUILD ----
- * This build logs every branch decision at INFO level (visible without
- * BuildConfig.DEBUG / without root shell -- just `logcat -s IsolPolicyZygisk`)
- * so we can see exactly where the flow diverges:
- *   1. Does preAppSpecialize() get called AT ALL for the app_zygote fork?
- *      (some Zygisk providers, e.g. NeoZygisk/ZygiskNext, skip calling
- *      modules for isolated-range UIDs if the root daemon socket connect
- *      fails - app_zygote's own uid falls inside the isolated uid range)
- *   2. What is uid / nice_name / is_child_zygote / app_data_dir at that point?
- *   3. Does the policy file open, and what's actually in it?
- *   4. Does the package string match a denylist entry?
+ * ---- TWO BUILD FLAVORS: release vs debug ----
+ * This source is compiled twice by the Gradle build (see module/build.gradle.kts
+ * buildTypes), each defining the preprocessor macro IP_DEBUG:
+ *
+ *   Release (IP_DEBUG=0): only load/verdict/warning/error-level events are
+ *   logged. preAppSpecialize() runs for EVERY process forked from zygote, so
+ *   logging every single call at INFO would flood logcat on a normal phone;
+ *   the release build stays quiet and only speaks up for denylist hits and
+ *   real problems, keeping it light for daily use.
+ *
+ *   Debug (IP_DEBUG=1): every branch decision is logged at INFO/DEBUG level
+ *   (visible without BuildConfig.DEBUG / without root shell -- just
+ *   `logcat -s IsolPolicyZygisk`) so we can see exactly where the flow
+ *   diverges:
+ *     1. Does preAppSpecialize() get called AT ALL for the app_zygote fork?
+ *        (some Zygisk providers, e.g. NeoZygisk/ZygiskNext, skip calling
+ *        modules for isolated-range UIDs if the root daemon socket connect
+ *        fails - app_zygote's own uid falls inside the isolated uid range)
+ *     2. What is uid / nice_name / is_child_zygote / app_data_dir at that point?
+ *     3. Does the policy file open, and what's actually in it?
+ *     4. Does the package string match a denylist entry?
  */
 
 #include <cstdio>
@@ -43,6 +53,7 @@
 #include <unistd.h>
 #include <android/log.h>
 #include <string>
+#include <signal.h>
 
 #include "zygisk.hpp"
 
@@ -50,11 +61,32 @@ using zygisk::Api;
 using zygisk::AppSpecializeArgs;
 using zygisk::ServerSpecializeArgs;
 
+// Set by Gradle via externalNativeBuild.ndkBuild.cFlags per build type
+// (see module/build.gradle.kts). Falls back to 0 (release-style, quiet) if
+// this file is ever compiled outside that Gradle wiring, e.g. via a plain
+// `ndk-build` invocation that doesn't pass -DIP_DEBUG=<0|1>.
+#ifndef IP_DEBUG
+#define IP_DEBUG 0
+#endif
+
 #define LOG_TAG "IsolPolicyZygisk"
+
+// Always compiled in, both flavors: real events (denylist hits) and genuine
+// problems (file/IPC errors). Kept minimal on purpose so release logcat
+// output stays small.
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+// Verbose/tracing logs: every call's arguments, every scanned line, every
+// "allowed" verdict, etc. Compiled to a no-op in release builds (IP_DEBUG=0)
+// so they cost nothing at runtime and produce zero logcat spam; fully
+// enabled in debug builds (IP_DEBUG=1) for troubleshooting.
+#if IP_DEBUG
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#else
+#define LOGD(...) ((void) 0)
+#endif
 
 // Policy file stored outside the module dir so it survives module updates.
 static const char *kPolicyFile = "/data/adb/isolationpolicy/denied.list";
@@ -92,7 +124,7 @@ static bool isPackageDenied(const std::string &pkg, bool *outFileError) {
         return false;
     }
 
-    LOGI("isPackageDenied: opened %s, scanning for pkg=\"%s\"", kPolicyFile, pkg.c_str());
+    LOGD("isPackageDenied: opened %s, scanning for pkg=\"%s\"", kPolicyFile, pkg.c_str());
 
     bool denied = false;
     int lineNo = 0;
@@ -119,8 +151,16 @@ static bool isPackageDenied(const std::string &pkg, bool *outFileError) {
     }
     fclose(f);
 
-    LOGI("isPackageDenied: pkg=\"%s\" lines_scanned=%d verdict=%s",
-         pkg.c_str(), lineNo, denied ? "DENIED" : "allowed");
+    // Denied verdicts are the actionable event -> always logged, even in
+    // release. Plain "allowed" is the common case (fires for every
+    // non-denied app_zygote spawn) -> debug-only, to keep release quiet.
+    if (denied) {
+        LOGI("isPackageDenied: pkg=\"%s\" lines_scanned=%d verdict=DENIED",
+             pkg.c_str(), lineNo);
+    } else {
+        LOGD("isPackageDenied: pkg=\"%s\" lines_scanned=%d verdict=allowed",
+             pkg.c_str(), lineNo);
+    }
     return denied;
 }
 
@@ -154,8 +194,11 @@ static bool isPackageDeniedViaCompanion(Api *api, const std::string &pkg) {
         LOGW("isPackageDeniedViaCompanion: IPC failed for pkg=\"%s\"", pkg.c_str());
         return false;
     }
-    LOGI("isPackageDeniedViaCompanion: pkg=\"%s\" companion verdict=%s",
-         pkg.c_str(), result ? "DENIED" : "allowed");
+    if (result) {
+        LOGI("isPackageDeniedViaCompanion: pkg=\"%s\" companion verdict=DENIED", pkg.c_str());
+    } else {
+        LOGD("isPackageDeniedViaCompanion: pkg=\"%s\" companion verdict=allowed", pkg.c_str());
+    }
     return result != 0;
 }
 
@@ -164,7 +207,8 @@ public:
     void onLoad(Api *api, JNIEnv *env) override {
         this->api = api;
         this->env = env;
-        LOGI("onLoad: module loaded into this process (pid=%d)", getpid());
+        LOGI("onLoad: module loaded into this process (pid=%d) build=%s",
+             getpid(), IP_DEBUG ? "debug" : "release");
     }
 
     void preAppSpecialize(AppSpecializeArgs *args) override {
@@ -174,12 +218,17 @@ public:
         // that process at all (framework/scope-level issue, not a bug in the
         // logic below) -- see NeoZygisk's app_specialize_pre()/skip_zygiskd
         // path for one known cause on isolated-range UIDs.
+        //
+        // This fires for EVERY process forked from zygote (not just
+        // app_zygote ones), so it's debug-only -- at INFO it would flood a
+        // release build's logcat on a normal phone with dozens of lines per
+        // app launch.
         jint uid = args->uid;
         const char *niceNameRaw = nullptr;
         if (args->nice_name != nullptr) {
             niceNameRaw = env->GetStringUTFChars(args->nice_name, nullptr);
         }
-        LOGI("preAppSpecialize: ENTER pid=%d uid=%d nice_name=%s is_child_zygote_ptr=%p "
+        LOGD("preAppSpecialize: ENTER pid=%d uid=%d nice_name=%s is_child_zygote_ptr=%p "
              "is_child_zygote_val=%s app_data_dir_ptr=%p",
              getpid(), (int) uid,
              niceNameRaw ? niceNameRaw : "(null)",
@@ -192,7 +241,7 @@ public:
 
         // We only care about processes that are going to become an app_zygote.
         if (args->is_child_zygote == nullptr || !*args->is_child_zygote) {
-            LOGI("preAppSpecialize: not an app_zygote spawn (is_child_zygote null or false) "
+            LOGD("preAppSpecialize: not an app_zygote spawn (is_child_zygote null or false) "
                  "-> unloading, letting specialize proceed normally");
             api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
             return;
@@ -211,7 +260,7 @@ public:
             std::string dataDir = raw ? raw : "";
             if (raw) env->ReleaseStringUTFChars(args->app_data_dir, raw);
             pkg = packageFromDataDir(dataDir);
-            LOGI("preAppSpecialize: resolved_pkg from app_data_dir=\"%s\" -> \"%s\"",
+            LOGD("preAppSpecialize: resolved_pkg from app_data_dir=\"%s\" -> \"%s\"",
                  dataDir.c_str(), pkg.c_str());
         }
 
@@ -225,7 +274,7 @@ public:
                 niceName.compare(niceName.size() - kZygoteSuffix.size(),
                                   kZygoteSuffix.size(), kZygoteSuffix) == 0) {
                 pkg = niceName.substr(0, niceName.size() - kZygoteSuffix.size());
-                LOGI("preAppSpecialize: app_data_dir was null, resolved_pkg from "
+                LOGD("preAppSpecialize: app_data_dir was null, resolved_pkg from "
                      "nice_name=\"%s\" (stripped _zygote) -> \"%s\"",
                      niceName.c_str(), pkg.c_str());
             } else {
@@ -248,22 +297,29 @@ public:
         bool fileError = false;
         bool denied = isPackageDenied(pkg, &fileError);
         if (fileError) {
-            LOGI("preAppSpecialize: direct read failed -> falling back to companion");
+            LOGD("preAppSpecialize: direct read failed -> falling back to companion");
             denied = isPackageDeniedViaCompanion(api, pkg);
         }
 
         if (denied) {
-            LOGI("preAppSpecialize: pkg=\"%s\" IS DENIED -- calling _exit(0) now, "
+            // Always logged, both flavors: this is the one event the whole
+            // module exists to produce, and it's rare enough (only fires for
+            // packages you explicitly denied) not to spam release logcat.
+            LOGI("preAppSpecialize: pkg=\"%s\" IS DENIED -- sending SIGKILL now, "
                  "before ZygotePreload.doPreload() can run", pkg.c_str());
             // Die *before* ZygotePreload.doPreload() can execute.
             // system_server sees the app_zygote as crashed -> isolated service
             // bind times out. DirtySepolicy will show:
             //   "WARNING: Service connection timedout, app zygote crashed?"
             // which is the EXPECTED result when blocking is working correctly.
-            _exit(0);
+            
+            // Gunakan SIGKILL agar proses terbunuh secara abnormal 
+            // sehingga ActivityManagerService langsung melakukan cleanup
+            kill(getpid(), SIGKILL);
         }
 
-        LOGI("preAppSpecialize: pkg=\"%s\" allowed (not on denylist) -> unloading", pkg.c_str());
+
+        LOGD("preAppSpecialize: pkg=\"%s\" allowed (not on denylist) -> unloading", pkg.c_str());
         api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
     }
 
@@ -300,8 +356,13 @@ static void companion_handler(int fd) {
 
     bool fileError = false;
     bool denied = isPackageDenied(pkg, &fileError);
-    LOGI("companion_handler: pkg=\"%s\" verdict=%s (running as uid=%d, fileError=%s)",
-         pkg.c_str(), denied ? "DENIED" : "allowed", getuid(), fileError ? "true" : "false");
+    if (denied) {
+        LOGI("companion_handler: pkg=\"%s\" verdict=DENIED (running as uid=%d, fileError=%s)",
+             pkg.c_str(), getuid(), fileError ? "true" : "false");
+    } else {
+        LOGD("companion_handler: pkg=\"%s\" verdict=allowed (running as uid=%d, fileError=%s)",
+             pkg.c_str(), getuid(), fileError ? "true" : "false");
+    }
 
     uint8_t result = denied ? 1 : 0;
     write(fd, &result, sizeof(result));

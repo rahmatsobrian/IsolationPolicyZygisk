@@ -43,3 +43,34 @@ function exec(command) {
         }
     });
 }
+
+/*
+ * Newer KernelSU / KernelSU-Next / APatch webviews additionally expose:
+ *
+ *   ksu.getPackagesInfo(packageNamesJson) -> packagesInfoJson
+ *
+ * Unlike ksu.exec/ksu.spawn this one is NOT callback-based - it's a plain
+ * synchronous call that takes a JSON-stringified array of package names and
+ * immediately returns a JSON-stringified array of PackagesInfo objects
+ * ({ packageName, versionName, versionCode, appLabel, isSystem, uid }). No
+ * shell round trip, no callback bookkeeping needed.
+ *
+ * This lets us resolve every installed app's display name (and the aapt
+ * badging fields we don't otherwise have) in one call instead of shelling
+ * out to aapt per-package.
+ */
+function hasPackagesInfoBridge() {
+    return hasRootBridge() && typeof window.ksu.getPackagesInfo === "function";
+}
+
+function getPackagesInfo(pkgs) {
+    if (!hasPackagesInfoBridge() || !Array.isArray(pkgs) || pkgs.length === 0) return [];
+    try {
+        const infoJson = window.ksu.getPackagesInfo(JSON.stringify(pkgs));
+        const result = JSON.parse(infoJson);
+        return Array.isArray(result) ? result : [];
+    } catch (err) {
+        console.warn("ksu.getPackagesInfo failed:", err);
+        return [];
+    }
+}

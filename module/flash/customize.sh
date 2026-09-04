@@ -3,16 +3,15 @@ SKIPUNZIP=0
 POLICY_DIR="/data/adb/isolationpolicy"
 POLICY_FILE="$POLICY_DIR/denied.list"
 
-ui_print "- Isolation Policy (Zygisk)"
+ui_print "- Isolation Policy Zygisk"
 
-# Zygisk must be enabled (Magisk Zygisk toggle, or ReZygisk/NeoZygisk installed).
-if [ -d "/data/adb/modules/zygisksu" ] || [ -d "/data/adb/modules/rezygisk" ] || \
-   [ -d "/data/adb/modules/brezygisk" ] || [ -e "/data/adb/zygisk_enabled" ] || \
+# Zygisk must be enabled
+if [ -d "/data/adb/modules/zygisksu" ] || [ -e "/data/adb/zygisk_enabled" ] || \
    [ "$ZYGISK_ENABLED" = "1" ]; then
     ui_print "- Zygisk provider detected"
 else
     ui_print "- WARNING: could not confirm a Zygisk provider is active."
-    ui_print "  Make sure Magisk Zygisk is ON, or ReZygisk/NeoZygisk/BreZygisk is installed."
+    ui_print "  Make sure your Zygisk is Active, or ZygiskNext/ReZygisk/NeoZygisk/BreZygisk/NyaZygisk is installed."
 fi
 
 # Policy storage lives outside the module directory on purpose, so it
