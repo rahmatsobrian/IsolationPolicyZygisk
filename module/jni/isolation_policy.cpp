@@ -18,9 +18,9 @@
  * set to `true` when Android is about to specialize a process as an
  * app_zygote (not a regular isolated child).
  *
- * By checking `is_child_zygote == true` in preAppSpecialize() and calling
- * _exit() when the package is denied, we kill the app_zygote process before
- * doPreload() ever runs.
+ * By checking `is_child_zygote == true` in preAppSpecialize() and blocking
+ * the process before specialization completes when the package is denied,
+ * we stop it before doPreload() ever runs.
  *
  * ---- TWO BUILD FLAVORS: release vs debug ----
  * This source is compiled twice by the Gradle build (see module/build.gradle.kts
@@ -304,15 +304,54 @@ public:
             // Always logged, both flavors: this is the one event the whole
             // module exists to produce, and it's rare enough (only fires for
             // packages you explicitly denied) not to spam release logcat.
-            LOGI("preAppSpecialize: pkg=\"%s\" IS DENIED -- calling _exit(0) now, "
-                 "before ZygotePreload.doPreload() can run", pkg.c_str());
-            // Die *before* ZygotePreload.doPreload() can execute.
-            // system_server sees the app_zygote as crashed -> isolated service
-            // bind times out. DirtySepolicy will show:
-            //   "WARNING: Service connection timedout, app zygote crashed?"
-            // which is the EXPECTED result when blocking is working correctly.
-            _exit(0);
+            LOGI("preAppSpecialize: pkg=\"%s\" IS DENIED -- blocking before "
+                 "ZygotePreload.doPreload() can run", pkg.c_str());
+
+            // ---- WHY NOT kill(getpid(), SIGKILL) ----
+            // By the time preAppSpecialize() runs, Zygote has ALREADY forked
+            // this child and handed its pid back to system_server over the
+            // fork socket -- system_server (ActivityManagerService) believes
+            // the app_zygote is alive and is tracking it via a
+            // ChildZygoteProcess object. Killing this process with a signal
+            // here makes system_server's death-recipient cleanup for that
+            // ChildZygoteProcess race against an in-flight isolated-service
+            // start request that's still holding a reference to it; on some
+            // Android versions that reference gets nulled out mid-use,
+            // producing:
+            //   ActivityManager: java.lang.NullPointerException: Attempt to
+            //   invoke virtual method '...ChildZygoteProcess.start(...)' on
+            //   a null object reference
+            // (confirmed via logcat -- happens ~12-21s after the SIGKILL,
+            // matching the binder/service-bind timeout window).
+            //
+            // ---- WHY pause() LOOP INSTEAD ----
+            // We still need to stop specializeAppProcess() /
+            // ZygotePreload.doPreload() from ever running for this pkg, but
+            // WITHOUT the process dying, so system_server never runs its
+            // "process died" cleanup path and the NPE race above can't
+            // happen. Blocking here just means the fork handshake succeeded
+            // but specialization never completes; from system_server's side
+            // the *isolated service* bind simply times out normally (the
+            // "Service connection timedout, app zygote crashed?" warning
+            // DirtySepolicy itself logs), which is the same outward signal
+            // we always wanted -- just reached without a signal-9 death in
+            // the middle.
+            //
+            // This does leave one stuck, near-zero-CPU zombie-ish process
+            // parked in memory per denied app_zygote spawn (pause() burns no
+            // CPU while blocked) until the app's own process is killed and
+            // the OS reaps this child along with it, or low memory killer
+            // reclaims it. If that turns out to be a problem in practice
+            // (e.g. many rapid respawns pile up stuck processes), the next
+            // step is native-hooking the specific file/syscall DirtySepolicy
+            // uses for its SELinux check so app_zygote can run through
+            // doPreload() normally and just see "clean" -- but that needs
+            // knowing DirtySepolicy's exact detection call first.
+            for (;;) {
+                pause();
+            }
         }
+
 
         LOGD("preAppSpecialize: pkg=\"%s\" allowed (not on denylist) -> unloading", pkg.c_str());
         api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
