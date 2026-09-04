@@ -53,7 +53,6 @@
 #include <unistd.h>
 #include <android/log.h>
 #include <string>
-#include <signal.h>
 
 #include "zygisk.hpp"
 
@@ -305,19 +304,15 @@ public:
             // Always logged, both flavors: this is the one event the whole
             // module exists to produce, and it's rare enough (only fires for
             // packages you explicitly denied) not to spam release logcat.
-            LOGI("preAppSpecialize: pkg=\"%s\" IS DENIED -- sending SIGKILL now, "
+            LOGI("preAppSpecialize: pkg=\"%s\" IS DENIED -- calling _exit(0) now, "
                  "before ZygotePreload.doPreload() can run", pkg.c_str());
             // Die *before* ZygotePreload.doPreload() can execute.
             // system_server sees the app_zygote as crashed -> isolated service
             // bind times out. DirtySepolicy will show:
             //   "WARNING: Service connection timedout, app zygote crashed?"
             // which is the EXPECTED result when blocking is working correctly.
-            
-            // Gunakan SIGKILL agar proses terbunuh secara abnormal 
-            // sehingga ActivityManagerService langsung melakukan cleanup
-            kill(getpid(), SIGKILL);
+            _exit(0);
         }
-
 
         LOGD("preAppSpecialize: pkg=\"%s\" allowed (not on denylist) -> unloading", pkg.c_str());
         api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
