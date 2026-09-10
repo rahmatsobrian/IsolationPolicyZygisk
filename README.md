@@ -1,8 +1,8 @@
 # Isolation Policy — Zygisk port
 
-A standalone **Zygisk** module (no LSPosed/Xposed required) ported from the
-LSPosed module `Isolation-Policy` by mhmrdd. Blocks isolated / app-zygote
-service processes for apps you choose, managed through a built-in WebUI.
+A standalone **Zygisk** experiment (no LSPosed/Xposed required) based on the
+LSPosed module `Isolation-Policy` by mhmrdd. It identifies app-zygote launches
+for apps selected through a built-in WebUI.
 Built on top of the official `zygisk-module-sample` template/scaffold — the
 Gradle/NDK layout, `Android.mk`, `Application.mk`, and `zygisk.hpp` are all
 unmodified from that template.
@@ -18,31 +18,28 @@ hand would mean hard-coding `ArtMethod` struct offsets per Android
 version/ABI: fragile, and easy to silently break on a device the module
 wasn't tested on.
 
-Instead, this port reaches the same practical outcome using only the public
-Zygisk API:
+This port can observe the relevant launch using only the public Zygisk API:
 
-- Zygisk calls `preAppSpecialize()` for **every** process forked from
-  zygote/app-zygote, including isolated service processes.
-- We detect isolated processes purely from the target **uid range**
-  (`appId` 90000-99999 — the same range Android itself uses for
-  `Process.isIsolated()`), resolve the owning package from `app_data_dir`,
-  and check it against an on-disk denylist.
-- If denied, we `_exit(0)` the child immediately, before it finishes
-  specializing.
+- Zygisk calls `preAppSpecialize()` after the app-zygote process is forked but
+  before specialization.
+- `is_child_zygote` identifies the app-zygote launch and the package is
+  resolved from its process name.
+- The package is checked against the on-disk denylist through the root
+  companion when the zygote SELinux domain cannot read `/data/adb`.
 
-**Net effect vs. the original:** apps on the denylist still end up with a
-non-functional isolated/app-zygote service. The failure mode is different —
-system_server sees a process that died right after forking, instead of a
-`startProcessLocked` call that silently reports success without ever
-forking — but the practical outcome for the target app is the same: its
-isolated service never comes up. In exchange, this implementation has zero
-dependency on ART internals and works unmodified across Android
-versions/ABIs.
+The callback is too late to reproduce the original module by preventing the
+fork. Killing the process from `preAppSpecialize()` makes `system_server`
+retain stale AppZygote lifecycle state until its timeout, causing immediate
+relaunches to hang or force-close. Instead, denied app zygotes stay alive and
+the module hooks the native `Class.classForName()` implementation. A class
+implementing `android.app.ZygotePreload` is rejected before initialization;
+Android handles that reflective load failure and completes the app-zygote
+startup protocol normally without calling `ZygotePreload.doPreload()`.
 
-One intentional scope change: since Zygisk can't distinguish "isolated via
-app-zygote" from "isolated the regular way" through its public args, this
-module blocks **any** isolated service process for a denied package, not
-just app-zygote-hosted ones (a superset of the original's scope).
+This differs observably from the original LSPosed hook. The isolated service
+can still start, so a checker may report that its app-zygote preload was not
+called rather than timing out. The protected operation is the same: selected
+packages cannot execute their `ZygotePreload` implementation.
 
 ## Project layout
 
@@ -78,17 +75,16 @@ Deliberately **outside** `/data/adb/modules/<id>/`, because that directory
 gets wiped and re-extracted on every module update; keeping the policy file
 elsewhere means updating the module never resets your denylist.
 
-- **Native module** reads this file directly on every `preAppSpecialize`
-  call. `preAppSpecialize` still runs with zygote's (root) privilege, so no
-  companion/root-daemon round trip is needed just to read it.
+- **Native module** first tries to read this file on each relevant
+  `preAppSpecialize` call, then uses the root companion when SELinux denies
+  direct access from the zygote domain.
 - **WebUI** writes this file by running root shell commands through the
   `ksu.exec()` bridge exposed by KernelSU / APatch / MMRL WebUI-X (which
   recent Magisk WebUI implementations also target) — again no companion
   needed for the same reason (the exec bridge itself already runs as root).
 
-The `REGISTER_ZYGISK_COMPANION` hook in `isolation_policy.cpp` is present
-but currently unused, reserved for anyone who wants to extend this with
-richer status reporting later.
+The `REGISTER_ZYGISK_COMPANION` handler in `isolation_policy.cpp` performs
+that privileged policy lookup.
 
 ## Release vs debug builds
 
@@ -181,8 +177,9 @@ cd ..
   manager to use the WebUI. If it's missing, you can still edit
   `/data/adb/isolationpolicy/denied.list` by hand (one package name per
   line) from any root shell.
-- Broader scope than the original (blocks all isolated processes for a
-  denied package, not just app-zygote ones) — see above.
+- This implementation suppresses `ZygotePreload`, but does not suppress the
+  app-zygote fork itself. Exact parity with the original module's service
+  timeout behavior requires its pre-fork `system_server` ART hook.
 - Denying your own launcher/critical system-adjacent app's isolated
   services can break that app; the WebUI only lists third-party apps
   (`pm list packages -3`) to reduce that risk, matching the original

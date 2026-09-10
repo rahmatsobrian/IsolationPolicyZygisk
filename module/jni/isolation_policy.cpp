@@ -12,15 +12,18 @@
  * detect Magisk/KSU/ZygiskNext dirty rules. The detection cannot be bypassed
  * by killing isolated children later - it's too late.
  *
- * ---- CORRECT APPROACH ----
- * We must prevent the app_zygote process from being forked in the first
- * place. Zygisk's AppSpecializeArgs has an `is_child_zygote` flag that is
- * set to `true` when Android is about to specialize a process as an
- * app_zygote (not a regular isolated child).
- *
- * By checking `is_child_zygote == true` in preAppSpecialize() and calling
- * _exit() when the package is denied, we kill the app_zygote process before
- * doPreload() ever runs.
+ * ---- ZYGISK LIMITATION ----
+ * Zygisk's preAppSpecialize() runs after zygote has already forked the
+ * process. Terminating an app zygote from this callback leaves Android's
+ * AppZygote bookkeeping waiting for a process that disappeared, which can
+ * make an immediate second launch hang or force-close until system_server
+ * cleans up the stale state. The original module avoids that problem by
+ * hooking ProcessList.startProcessLocked before the fork, an operation the
+ * public Zygisk API cannot perform. Instead, this module keeps the app
+ * zygote alive and hooks Class.classForName() in denied app zygotes. Classes
+ * implementing android.app.ZygotePreload are rejected before initialization,
+ * so AppZygoteInit handles the reflective failure and completes its normal
+ * socket protocol without running the package's preload code.
  *
  * ---- TWO BUILD FLAVORS: release vs debug ----
  * This source is compiled twice by the Gradle build (see module/build.gradle.kts
@@ -46,7 +49,6 @@
  */
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <cerrno>
 #include <cstdint>
@@ -170,6 +172,30 @@ static bool isPackageDenied(const std::string &pkg, bool *outFileError) {
 // fopen() on the policy file returns EACCES from that domain on this
 // device), while the companion runs in the provider's own root daemon
 // domain, which does have access to files under /data/adb.
+static bool readAll(int fd, void *buffer, size_t size) {
+    auto *p = static_cast<uint8_t *>(buffer);
+    while (size > 0) {
+        ssize_t n = read(fd, p, size);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return false;
+        p += n;
+        size -= static_cast<size_t>(n);
+    }
+    return true;
+}
+
+static bool writeAll(int fd, const void *buffer, size_t size) {
+    auto *p = static_cast<const uint8_t *>(buffer);
+    while (size > 0) {
+        ssize_t n = write(fd, p, size);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return false;
+        p += n;
+        size -= static_cast<size_t>(n);
+    }
+    return true;
+}
+
 static bool isPackageDeniedViaCompanion(Api *api, const std::string &pkg) {
     int fd = api->connectCompanion();
     if (fd < 0) {
@@ -177,16 +203,11 @@ static bool isPackageDeniedViaCompanion(Api *api, const std::string &pkg) {
         return false;
     }
 
-    bool ok = true;
     uint32_t len = (uint32_t) pkg.size();
-    ok = ok && write(fd, &len, sizeof(len)) == (ssize_t) sizeof(len);
-    ok = ok && write(fd, pkg.data(), len) == (ssize_t) len;
+    bool ok = writeAll(fd, &len, sizeof(len)) && writeAll(fd, pkg.data(), len);
 
     uint8_t result = 0;
-    if (ok) {
-        ssize_t n = read(fd, &result, sizeof(result));
-        ok = (n == (ssize_t) sizeof(result));
-    }
+    if (ok) ok = readAll(fd, &result, sizeof(result));
     close(fd);
 
     if (!ok) {
@@ -199,6 +220,61 @@ static bool isPackageDeniedViaCompanion(Api *api, const std::string &pkg) {
         LOGD("isPackageDeniedViaCompanion: pkg=\"%s\" companion verdict=allowed", pkg.c_str());
     }
     return result != 0;
+}
+
+using ClassForNameFn = jclass (*)(JNIEnv *, jclass, jstring, jboolean, jobject);
+static ClassForNameFn originalClassForName = nullptr;
+
+static jclass hookedClassForName(JNIEnv *env, jclass clazz, jstring className,
+                                 jboolean initialize, jobject classLoader) {
+    if (!originalClassForName) return nullptr;
+
+    // Resolve without initialization first. This lets us identify and reject
+    // ZygotePreload implementations before any static initializer can run.
+    jclass loaded = originalClassForName(env, clazz, className, JNI_FALSE, classLoader);
+    if (!loaded || env->ExceptionCheck()) return loaded;
+
+    jclass preloadClass = env->FindClass("android/app/ZygotePreload");
+    if (preloadClass && env->IsAssignableFrom(loaded, preloadClass) == JNI_TRUE) {
+        const char *rawName = className ? env->GetStringUTFChars(className, nullptr) : nullptr;
+        LOGI("hookedClassForName: blocked ZygotePreload class \"%s\"",
+             rawName ? rawName : "(unknown)");
+        if (rawName) env->ReleaseStringUTFChars(className, rawName);
+
+        jclass exceptionClass = env->FindClass("java/lang/ClassNotFoundException");
+        if (exceptionClass) {
+            env->ThrowNew(exceptionClass, "Zygote preload blocked by Isolation Policy");
+            env->DeleteLocalRef(exceptionClass);
+        }
+        env->DeleteLocalRef(preloadClass);
+        env->DeleteLocalRef(loaded);
+        return nullptr;
+    }
+
+    if (preloadClass) {
+        env->DeleteLocalRef(preloadClass);
+    } else if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
+
+    if (!initialize) return loaded;
+    env->DeleteLocalRef(loaded);
+    return originalClassForName(env, clazz, className, JNI_TRUE, classLoader);
+}
+
+static bool installPreloadHook(Api *api, JNIEnv *env) {
+    JNINativeMethod method = {
+        "classForName",
+        "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;",
+        reinterpret_cast<void *>(hookedClassForName),
+    };
+    api->hookJniNativeMethods(env, "java/lang/Class", &method, 1);
+    originalClassForName = reinterpret_cast<ClassForNameFn>(method.fnPtr);
+    if (!originalClassForName) {
+        LOGE("installPreloadHook: java.lang.Class.classForName native not found");
+        return false;
+    }
+    return true;
 }
 
 class IsolationPolicyModule : public zygisk::ModuleBase {
@@ -301,20 +377,18 @@ public:
         }
 
         if (denied) {
-            // Always logged, both flavors: this is the one event the whole
-            // module exists to produce, and it's rare enough (only fires for
-            // packages you explicitly denied) not to spam release logcat.
-            LOGI("preAppSpecialize: pkg=\"%s\" IS DENIED -- calling _exit(0) now, "
-                 "before ZygotePreload.doPreload() can run", pkg.c_str());
-            // Die *before* ZygotePreload.doPreload() can execute.
-            // system_server sees the app_zygote as crashed -> isolated service
-            // bind times out. DirtySepolicy will show:
-            //   "WARNING: Service connection timedout, app zygote crashed?"
-            // which is the EXPECTED result when blocking is working correctly.
-            _exit(0);
+            if (installPreloadHook(api, env)) {
+                LOGI("preAppSpecialize: pkg=\"%s\" is denied; ZygotePreload hook installed",
+                     pkg.c_str());
+                // The app zygote and its children can call the hooked native
+                // method later, so this library must remain mapped.
+                return;
+            }
+            LOGE("preAppSpecialize: pkg=\"%s\" is denied but hook installation failed; "
+                 "allowing preload", pkg.c_str());
         }
 
-        LOGD("preAppSpecialize: pkg=\"%s\" allowed (not on denylist) -> unloading", pkg.c_str());
+        LOGD("preAppSpecialize: pkg=\"%s\" continuing specialization -> unloading", pkg.c_str());
         api->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
     }
 
@@ -334,18 +408,18 @@ private:
 // back [uint8 0/1].
 static void companion_handler(int fd) {
     uint32_t len = 0;
-    if (read(fd, &len, sizeof(len)) != (ssize_t) sizeof(len) || len == 0 || len > 255) {
+    if (!readAll(fd, &len, sizeof(len)) || len == 0 || len > 255) {
         LOGW("companion_handler: bad/oversized length (len=%u)", len);
         uint8_t no = 0;
-        write(fd, &no, sizeof(no));
+        writeAll(fd, &no, sizeof(no));
         return;
     }
 
     std::string pkg(len, '\0');
-    if (read(fd, &pkg[0], len) != (ssize_t) len) {
+    if (!readAll(fd, &pkg[0], len)) {
         LOGW("companion_handler: failed reading %u byte package name", len);
         uint8_t no = 0;
-        write(fd, &no, sizeof(no));
+        writeAll(fd, &no, sizeof(no));
         return;
     }
 
@@ -360,7 +434,9 @@ static void companion_handler(int fd) {
     }
 
     uint8_t result = denied ? 1 : 0;
-    write(fd, &result, sizeof(result));
+    if (!writeAll(fd, &result, sizeof(result))) {
+        LOGW("companion_handler: failed writing verdict for pkg=\"%s\"", pkg.c_str());
+    }
 }
 
 REGISTER_ZYGISK_MODULE(IsolationPolicyModule)

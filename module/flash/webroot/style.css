@@ -206,6 +206,7 @@ a { color: var(--md-sys-color-primary); }
 /* Collapsing search overlay, slides over the title */
 .search-overlay {
   position: absolute;
+padding: 26px 0 0 0;
   left: 12px;
   right: 56px;
   top: 50%;
@@ -460,19 +461,7 @@ a { color: var(--md-sys-color-primary); }
 
 .row:last-child { border-bottom: none; }
 .row:active { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
-.row[data-denied="true"] { background: color-mix(in srgb, var(--md-sys-color-error) 10%, transparent); }
-.row[data-pending="true"]::after {
-  content: "";
-  position: absolute;
-  left: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--md-sys-color-tertiary);
-}
-
+.row[data-denied="true"] { background: color-mix(in srgb, var(--md-sys-color-primary) 10%, transparent); }
 .row-avatar {
   flex-shrink: 0;
   width: 36px;
@@ -489,10 +478,11 @@ a { color: var(--md-sys-color-primary); }
   user-select: none;
 }
 .row[data-denied="true"] .row-avatar {
-  background: var(--md-sys-color-error-container);
-  color: var(--md-sys-color-on-error-container);
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
 }
-.row-avatar.has-icon {
+.row-avatar.has-icon,
+.row[data-denied="true"] .row-avatar.has-icon {
   background: transparent;
 }
 .row-avatar img {
@@ -527,18 +517,18 @@ a { color: var(--md-sys-color-primary); }
 /* md-switch (Material Web Components) sizing/alignment inside rows */
 md-switch { flex-shrink: 0; }
 .row[data-denied="true"] md-switch {
-  --md-switch-selected-track-color: var(--md-sys-color-error);
-  --md-switch-selected-hover-track-color: var(--md-sys-color-error);
-  --md-switch-selected-focus-track-color: var(--md-sys-color-error);
-  --md-switch-selected-pressed-track-color: var(--md-sys-color-error);
-  --md-switch-selected-handle-color: var(--md-sys-color-on-error);
-  --md-switch-selected-hover-handle-color: var(--md-sys-color-on-error);
-  --md-switch-selected-focus-handle-color: var(--md-sys-color-on-error);
-  --md-switch-selected-pressed-handle-color: var(--md-sys-color-on-error);
-  --md-switch-selected-icon-color: var(--md-sys-color-error);
-  --md-switch-selected-hover-icon-color: var(--md-sys-color-error);
-  --md-switch-selected-focus-icon-color: var(--md-sys-color-error);
-  --md-switch-selected-pressed-icon-color: var(--md-sys-color-error);
+  --md-switch-selected-track-color: var(--md-sys-color-primary);
+  --md-switch-selected-hover-track-color: var(--md-sys-color-primary);
+  --md-switch-selected-focus-track-color: var(--md-sys-color-primary);
+  --md-switch-selected-pressed-track-color: var(--md-sys-color-primary);
+  --md-switch-selected-handle-color: var(--md-sys-color-on-primary);
+  --md-switch-selected-hover-handle-color: var(--md-sys-color-on-primary);
+  --md-switch-selected-focus-handle-color: var(--md-sys-color-on-primary);
+  --md-switch-selected-pressed-handle-color: var(--md-sys-color-on-primary);
+  --md-switch-selected-icon-color: var(--md-sys-color-primary);
+  --md-switch-selected-hover-icon-color: var(--md-sys-color-primary);
+  --md-switch-selected-focus-icon-color: var(--md-sys-color-primary);
+  --md-switch-selected-pressed-icon-color: var(--md-sys-color-primary);
 }
 
 /* compact density */
