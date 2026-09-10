@@ -462,7 +462,31 @@ padding: 26px 0 0 0;
 .row:last-child { border-bottom: none; }
 .row:active { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
 .row[data-denied="true"] { background: color-mix(in srgb, var(--md-sys-color-primary) 10%, transparent); }
+
+/* Unsaved (pending) marker: a small dot on the avatar corner, and a thin
+   accent bar on the row's leading edge, so a toggle the user hasn't Applied
+   yet is visible at a glance without having to switch to the Unsaved chip. */
+.row[data-pending="true"] { box-shadow: inset 3px 0 0 var(--md-sys-color-tertiary); }
+.row[data-pending="true"] .row-avatar::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--md-sys-color-tertiary);
+  border: 2px solid var(--md-sys-color-surface-container);
+}
+body[data-density="compact"] .row[data-pending="true"] .row-avatar::after {
+  width: 8px;
+  height: 8px;
+  top: -1px;
+  right: -1px;
+}
+
 .row-avatar {
+  position: relative;
   flex-shrink: 0;
   width: 36px;
   height: 36px;

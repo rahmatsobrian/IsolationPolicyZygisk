@@ -590,23 +590,34 @@ function shortLabel(pkg) {
     return seg.slice(0, 2);
 }
 
+// Resolved app label when available (LABEL_CACHE is filled by
+// fetchAppLabelsBatch/fetchAppLabelViaAapt - see notes above), falling back
+// to the package name for apps whose label hasn't resolved yet. Used so
+// "sort by name" orders by what the user actually sees in the list (the app
+// name) instead of the package id underneath it.
+function labelForSort(pkg) {
+    const label = LABEL_CACHE.get(pkg);
+    return label || pkg;
+}
+
 function sortPackages(list) {
     const arr = [...list];
+    const byName = (a, b) => labelForSort(a).localeCompare(labelForSort(b));
     if (state.sort === "denied") {
         arr.sort((a, b) => {
             const da = state.workingDenied.has(a) ? 0 : 1;
             const db = state.workingDenied.has(b) ? 0 : 1;
-            return da - db || a.localeCompare(b);
+            return da - db || byName(a, b);
         });
     } else if (state.sort === "pending") {
         const isPending = (p) => state.workingDenied.has(p) !== state.savedDenied.has(p);
         arr.sort((a, b) => {
             const pa = isPending(a) ? 0 : 1;
             const pb = isPending(b) ? 0 : 1;
-            return pa - pb || a.localeCompare(b);
+            return pa - pb || byName(a, b);
         });
     } else {
-        arr.sort((a, b) => a.localeCompare(b));
+        arr.sort(byName);
     }
     return arr;
 }
@@ -639,6 +650,7 @@ function render() {
         row.dataset.denied = String(isDenied);
         row.dataset.pending = String(isPending);
         row.dataset.pkg = pkg;
+        if (isPending) row.title = i18n.t("chip_pending");
 
         const avatar = document.createElement("span");
         avatar.className = "row-avatar";
@@ -690,6 +702,7 @@ function render() {
             const nowPending = sw.selected !== state.savedDenied.has(pkg);
             row.dataset.denied = String(sw.selected);
             row.dataset.pending = String(nowPending);
+            row.title = nowPending ? i18n.t("chip_pending") : "";
             haptic();
             updateStats();
             if (state.chip !== "all") render(); // row may need to (dis)appear under the active chip
